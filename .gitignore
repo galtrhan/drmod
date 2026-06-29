@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.so
+
+# Virtual environments
+.venv/
+
+# Build artifacts
+dist/
+build/
+*.build/
+*.dist/
+*.onefile-build/
+drmod.build/
+drmod.dist/
+drmod.onefile-build/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local work dirs (extracted FLI frames)
+fli_work/

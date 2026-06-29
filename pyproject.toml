@@ -1,0 +1,28 @@
+[project]
+name = "drmod"
+version = "0.1.0"
+description = "Extract and repack Carmageddon/Dethrace 8-bit FLI/FLC animations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pillow>=10.0",
+]
+
+[project.scripts]
+drmod = "drmod.cli:main"
+
+[dependency-groups]
+dev = [
+    "nuitka>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drmod"]
+
+[tool.uv]
+package = true
