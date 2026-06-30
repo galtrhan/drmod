@@ -101,7 +101,7 @@ load_ini :: proc(path: string, allocator := context.allocator) -> (data: Ini_Dat
 
 save_ini :: proc(path: string, data: Ini_Data) -> os.Error {
 	dir := filepath.dir(path)
-	if err := os.make_directory_all(dir); err != nil {
+	if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
 		return err
 	}
 	b := strings.builder_make()

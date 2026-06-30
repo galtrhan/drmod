@@ -20,11 +20,21 @@ strip_line_ending :: proc(text: string) -> string {
 	return text[:end]
 }
 
-decode_line_method1 :: proc(ciphertext: string, allocator := context.allocator) -> (result: string, err: os.Error) {
-	chars := make([dynamic]u8, len(ciphertext), allocator) or_return
-	for c in ciphertext {
-		append(&chars, u8(c))
+clone_chars :: proc(chars: ^[dynamic]u8, allocator := context.allocator) -> (result: string, err: os.Error) {
+	result = strings.clone(string(chars[:]), allocator) or_return
+	delete(chars^)
+	return result, nil
+}
+
+append_string_bytes :: proc(chars: ^[dynamic]u8, text: string) {
+	for i in 0 ..< len(text) {
+		append(chars, text[i])
 	}
+}
+
+decode_line_method1 :: proc(ciphertext: string, allocator := context.allocator) -> (result: string, err: os.Error) {
+	chars := make([dynamic]u8, 0, len(ciphertext), allocator) or_return
+	append_string_bytes(&chars, ciphertext)
 	length := len(chars)
 	seed := length % 16
 	key := LONG_KEY
@@ -41,14 +51,12 @@ decode_line_method1 :: proc(ciphertext: string, allocator := context.allocator) 
 			chars[i] = '\t'
 		}
 	}
-	return string(chars[:]), nil
+	return clone_chars(&chars, allocator)
 }
 
 encode_line_method1 :: proc(plaintext: string, allocator := context.allocator) -> (result: string, err: os.Error) {
-	chars := make([dynamic]u8, len(plaintext), allocator) or_return
-	for c in plaintext {
-		append(&chars, u8(c))
-	}
+	chars := make([dynamic]u8, 0, len(plaintext), allocator) or_return
+	append_string_bytes(&chars, plaintext)
 	length := len(chars)
 	seed := length % 16
 	key := LONG_KEY
@@ -71,14 +79,12 @@ encode_line_method1 :: proc(plaintext: string, allocator := context.allocator) -
 			chars[i] = '\t'
 		}
 	}
-	return string(chars[:]), nil
+	return clone_chars(&chars, allocator)
 }
 
 decode_line2 :: proc(ciphertext: string, allocator := context.allocator) -> (result: string, err: os.Error) {
-	chars := make([dynamic]u8, len(ciphertext), allocator) or_return
-	for c in ciphertext {
-		append(&chars, u8(c))
-	}
+	chars := make([dynamic]u8, 0, len(ciphertext), allocator) or_return
+	append_string_bytes(&chars, ciphertext)
 	length := len(chars)
 	seed := length % 16
 	key := LONG_KEY
@@ -89,23 +95,21 @@ decode_line2 :: proc(ciphertext: string, allocator := context.allocator) -> (res
 		if chars[i] == '\t' {
 			chars[i] = 0x80
 		}
-		c := i32(chars[i]) - 32
-		if (c & 0x80) == 0 {
-			chars[i] = u8((c ~ i32(key[seed] & 0x7F)) + 32)
+		v := u32(chars[i]) - 32
+		if (v & 0x80) == 0 {
+			chars[i] = u8((v ~ u32(key[seed] & 0x7F)) + 32)
 		}
 		seed = (seed + 7) % 16
 		if chars[i] == 0x80 {
 			chars[i] = '\t'
 		}
 	}
-	return string(chars[:]), nil
+	return clone_chars(&chars, allocator)
 }
 
 encode_line2 :: proc(plaintext: string, allocator := context.allocator) -> (result: string, err: os.Error) {
-	chars := make([dynamic]u8, len(plaintext), allocator) or_return
-	for c in plaintext {
-		append(&chars, u8(c))
-	}
+	chars := make([dynamic]u8, 0, len(plaintext), allocator) or_return
+	append_string_bytes(&chars, plaintext)
 	length := len(chars)
 	seed := length % 16
 	key := LONG_KEY
@@ -122,16 +126,16 @@ encode_line2 :: proc(plaintext: string, allocator := context.allocator) -> (resu
 		if chars[i] == '\t' {
 			chars[i] = 0x80
 		}
-		c := i32(chars[i]) - 32
-		if (c & 0x80) == 0 {
-			chars[i] = u8((c ~ i32(key[seed] & 0x7F)) + 32)
+		v := u32(chars[i]) - 32
+		if (v & 0x80) == 0 {
+			chars[i] = u8((v ~ u32(key[seed] & 0x7F)) + 32)
 		}
 		seed = (seed + 7) % 16
 		if chars[i] == 0x80 {
 			chars[i] = '\t'
 		}
 	}
-	return string(chars[:]), nil
+	return clone_chars(&chars, allocator)
 }
 
 read_text_lines :: proc(path: string, allocator := context.allocator) -> (lines: [dynamic]string, err: os.Error) {
@@ -156,12 +160,12 @@ split_lines_latin :: proc(text: string, allocator := context.allocator) -> (line
 			if end > start && text[end - 1] == '\r' {
 				end -= 1
 			}
-			append(&lines, text[start:end])
+			append(&lines, strings.clone(text[start:end], allocator) or_return)
 			start = i + 1
 		}
 	}
 	if start < len(text) {
-		append(&lines, text[start:])
+		append(&lines, strings.clone(text[start:], allocator) or_return)
 	}
 	return lines, nil
 }
@@ -179,37 +183,21 @@ read_physical_lines :: proc(
 		return lines, trailing, read_err
 	}
 	if len(data) == 0 {
+		delete(data)
 		return
 	}
-	suffix: []u8
-	body := data
-	if strings.has_suffix(string(data), "\r\n") {
-		suffix = []u8{'\r', '\n'}
-		body = data[:len(data) - 2]
-		lines, err = split_on_delim(string(body), "\r\n", allocator)
-	} else if strings.has_suffix(string(data), "\n") {
-		suffix = []u8{'\n'}
-		body = data[:len(data) - 1]
-		lines, err = split_on_delim(string(body), "\n", allocator)
-	} else {
-		lines, err = split_on_delim(string(body), "\r\n", allocator)
+	text := string(data)
+	has_crlf_trail := strings.has_suffix(text, "\r\n")
+	has_lf_trail := !has_crlf_trail && strings.has_suffix(text, "\n")
+	if has_crlf_trail {
+		text = text[:len(text) - 2]
+		trailing = []u8{'\r', '\n'}
+	} else if has_lf_trail {
+		text = text[:len(text) - 1]
+		trailing = []u8{'\n'}
 	}
-	trailing = suffix
+	lines, err = split_lines_latin(text, allocator)
 	delete(data)
-	return
-}
-
-split_on_delim :: proc(text, delim: string, allocator := context.allocator) -> (lines: [dynamic]string, err: os.Error) {
-	lines = make([dynamic]string, allocator)
-	if len(text) == 0 {
-		append(&lines, "")
-		return
-	}
-	parts := strings.split(text, delim, allocator)
-	defer delete(parts)
-	for part in parts {
-		append(&lines, part)
-	}
 	return
 }
 
@@ -241,6 +229,9 @@ group_physical_lines :: proc(lines: []string, allocator := context.allocator) ->
 	current: string
 	has_current := false
 	for line in lines {
+		if len(line) == 0 {
+			continue
+		}
 		if line[0] == ENCODED_LINE_PREFIX {
 			if has_current {
 				append(&chunks, current)
@@ -262,7 +253,7 @@ group_physical_lines :: proc(lines: []string, allocator := context.allocator) ->
 split_physical_lines :: proc(encoded_body: string, wrap: bool, allocator := context.allocator) -> (out: [dynamic]string, err: os.Error) {
 	out = make([dynamic]string, allocator)
 	if !wrap || len(encoded_body) <= WRAP_WIDTH {
-		append(&out, fmt.tprintf("%c%s", ENCODED_LINE_PREFIX, encoded_body))
+		append(&out, persist_printf("%c%s", ENCODED_LINE_PREFIX, encoded_body, allocator = allocator))
 		return
 	}
 	parts := make([dynamic]string, allocator)
@@ -270,9 +261,9 @@ split_physical_lines :: proc(encoded_body: string, wrap: bool, allocator := cont
 		end := min(i + WRAP_WIDTH, len(encoded_body))
 		append(&parts, encoded_body[i:end])
 	}
-	append(&out, fmt.tprintf("%c%s", ENCODED_LINE_PREFIX, parts[0]))
+	append(&out, persist_printf("%c%s", ENCODED_LINE_PREFIX, parts[0], allocator = allocator))
 	for part in parts[1:] {
-		append(&out, part)
+		append(&out, persist_string(part, allocator))
 	}
 	delete(parts)
 	return
@@ -338,8 +329,7 @@ decode_file_lines :: proc(path: string, method: Maybe(int), allocator := context
 	if read_err != nil {
 		return lines, read_err
 	}
-	defer delete(physical)
-	defer delete(trailing)
+	defer delete_lines(&physical)
 	if len(physical) == 0 {
 		return
 	}
@@ -382,7 +372,7 @@ write_encoded_file :: proc(
 ) -> os.Error {
 	enc_method := resolve_method(path, path, method, allocator)
 	out_lines := make([dynamic]string, allocator)
-	defer delete(out_lines)
+	defer delete_lines(&out_lines)
 	for line in logical_lines {
 		encoded_body: string
 		err: os.Error
@@ -404,7 +394,7 @@ write_encoded_file :: proc(
 				append(&out_lines, p)
 			}
 		} else {
-			append(&out_lines, fmt.tprintf("%c%s", ENCODED_LINE_PREFIX, encoded_body))
+			append(&out_lines, persist_printf("%c%s", ENCODED_LINE_PREFIX, encoded_body, allocator = allocator))
 		}
 	}
 	ending := transmute([]u8)line_ending
@@ -421,29 +411,35 @@ decode_file :: proc(
 	if read_err != nil {
 		return 0, read_err
 	}
-	defer delete(physical)
-	defer delete(trailing)
+	defer delete_lines(&physical)
 	if len(physical) == 0 {
 		write_err := os.write_entire_file(dst, nil)
 		return 0, write_err
 	}
 	enc_method := resolve_method(src, dst, method, allocator)
 	out_lines := make([dynamic]string, allocator)
-	defer delete(out_lines)
-	for line in physical {
-		if line[0] == ENCODED_LINE_PREFIX {
+	defer delete_lines(&out_lines)
+	if len(physical) > 0 && len(physical[0]) > 0 && physical[0][0] == ENCODED_LINE_PREFIX {
+		chunks, group_err := group_physical_lines(physical[:], allocator)
+		if group_err != nil {
+			return 0, group_err
+		}
+		defer delete(chunks)
+		for chunk in chunks {
 			decoded: string
 			if enc_method == 1 {
-				decoded, err = decode_line_method1(line[1:], allocator)
+				decoded, err = decode_line_method1(chunk, allocator)
 			} else {
-				decoded, err = decode_line2(line[1:], allocator)
+				decoded, err = decode_line2(chunk, allocator)
 			}
 			if err != nil {
 				return 0, err
 			}
 			append(&out_lines, decoded)
-		} else {
-			append(&out_lines, fmt.tprintf("%c%s", RAW_LINE_PREFIX, line))
+		}
+	} else {
+		for line in physical {
+			append(&out_lines, persist_string(line, allocator))
 		}
 	}
 	ending := transmute([]u8)line_ending
@@ -462,15 +458,14 @@ encode_file :: proc(
 	if read_err != nil {
 		return 0, read_err
 	}
-	defer delete(physical)
-	defer delete(trailing)
+	defer delete_lines(&physical)
 	if len(physical) == 0 {
 		write_err := os.write_entire_file(dst, nil)
 		return 0, write_err
 	}
 	enc_method := resolve_method(src, dst, method, allocator)
 	out_lines := make([dynamic]string, allocator)
-	defer delete(out_lines)
+	defer delete_lines(&out_lines)
 	for line in physical {
 		if len(line) > 0 && line[0] == RAW_LINE_PREFIX {
 			append(&out_lines, line[1:])
@@ -495,7 +490,7 @@ encode_file :: proc(
 			}
 			delete(parts)
 		} else {
-			append(&out_lines, fmt.tprintf("%c%s", ENCODED_LINE_PREFIX, encoded_body))
+			append(&out_lines, persist_printf("%c%s", ENCODED_LINE_PREFIX, encoded_body, allocator = allocator))
 		}
 	}
 	ending := transmute([]u8)line_ending

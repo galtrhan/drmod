@@ -10,6 +10,13 @@ Config_Error :: struct {
 	msg: string,
 }
 
+delete_lines :: proc(lines: ^[dynamic]string) {
+	for line in lines^ {
+		delete(line)
+	}
+	delete(lines^)
+}
+
 config_error :: proc(msg: string, allocator := context.allocator) -> Config_Error {
 	return {strings.clone(msg, allocator)}
 }
@@ -186,7 +193,7 @@ config_get :: proc(file_path, key: string, method: Maybe(int), allocator := cont
 	if re.msg != "" {
 		return "", re
 	}
-	defer delete(lines)
+	defer delete_lines(&lines)
 	key_parts := strings.split(key, ".", allocator)
 	defer delete(key_parts)
 	if len(key_parts) > 0 && key_parts[0] == "line" {
@@ -209,7 +216,7 @@ config_set :: proc(
 	if re.msg != "" {
 		return "", re
 	}
-	defer delete(lines)
+	defer delete_lines(&lines)
 	key_parts := strings.split(key, ".", allocator)
 	defer delete(key_parts)
 	if len(key_parts) > 0 && key_parts[0] == "line" {
@@ -236,16 +243,19 @@ config_keys :: proc(file_path: string, method: Maybe(int), allocator := context.
 	if re.msg != "" {
 		return keys, re
 	}
-	defer delete(lines)
+	defer delete_lines(&lines)
 	keys = make([dynamic]string, allocator)
 	for line_number in 1 ..= len(lines) {
-		append(&keys, fmt.tprintf("line.%d", line_number))
+		append(&keys, persist_printf("line.%d", line_number, allocator = allocator))
 		tokens, tok_err := tokenize_line(lines[line_number - 1], allocator)
 		if tok_err != nil {
 			continue
 		}
 		for field_index in 0 ..< len(tokens) {
-			append(&keys, fmt.tprintf("line.%d.field.%d", line_number, field_index))
+			append(&keys, persist_printf("line.%d.field.%d", line_number, field_index, allocator = allocator))
+		}
+		for token in tokens {
+			delete(token)
 		}
 		delete(tokens)
 	}
