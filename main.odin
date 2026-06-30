@@ -527,7 +527,7 @@ cmd_settings_get :: proc(args: []string) -> int {
 		return 1
 	}
 	value, err := get_setting_value(args[0])
-	if err != {} {
+	if err.msg != "" {
 		fmt.fprintf(os.stderr, "error: %s\n", err.msg)
 		return 1
 	}
@@ -603,7 +603,7 @@ cmd_config_get :: proc(args: []string) -> int {
 		return 1
 	}
 	value, err := config_get(positional[0], positional[1], flags.method)
-	if err != {} {
+	if err.msg != "" {
 		print_config_error(err)
 		return 1
 	}
@@ -623,7 +623,7 @@ cmd_config_set :: proc(args: []string) -> int {
 		return 1
 	}
 	saved, err := config_set(positional[0], positional[1], positional[2], flags.method, flags.wrap)
-	if err != {} {
+	if err.msg != "" {
 		print_config_error(err)
 		return 1
 	}
@@ -642,7 +642,7 @@ cmd_config_keys :: proc(args: []string) -> int {
 		return 1
 	}
 	keys, err := config_keys(positional[0], flags.method)
-	if err != {} {
+	if err.msg != "" {
 		print_config_error(err)
 		return 1
 	}

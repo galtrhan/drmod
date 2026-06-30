@@ -137,7 +137,7 @@ count_png_frames :: proc(out_dir: string) -> (count: int, err: os.Error) {
 }
 
 extract_fli :: proc(fli_path, out_dir: string) -> (frame_count: int, err: os.Error) {
-	if err = os.make_directory_all(out_dir); err != nil {
+	if err = os.make_directory_all(out_dir); err != nil && err != os.General_Error.Exist {
 		return
 	}
 	ffmpeg, ok := find_executable("ffmpeg")
@@ -229,7 +229,7 @@ pack_frames :: proc(frames_dir, out_fli: string) -> os.Error {
 		return list_err
 	}
 	defer delete(frames)
-	if err := os.make_directory_all(filepath.dir(out_fli)); err != nil {
+	if err := os.make_directory_all(filepath.dir(out_fli)); err != nil && err != os.General_Error.Exist {
 		return err
 	}
 	cmd := make([dynamic]string, context.temp_allocator)
