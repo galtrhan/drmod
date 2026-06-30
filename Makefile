@@ -24,7 +24,7 @@ sync:
 
 build: sync $(BINARY)
 
-$(BINARY): pyproject.toml src/drmod/cli.py src/drmod/__main__.py
+$(BINARY): pyproject.toml src/drmod/cli.py src/drmod/settings.py src/drmod/game_config.py src/drmod/text_codec.py src/drmod/__main__.py
 	mkdir -p $(DIST_DIR)
 	$(UV) run --group dev nuitka \
 		--mode=onefile \

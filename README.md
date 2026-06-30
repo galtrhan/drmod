@@ -32,6 +32,50 @@ uv sync
 
 This creates a `.venv` and installs `drmod` with Pillow.
 
+## Settings
+
+Paths are stored in `~/.local/share/dethrace/mod/settings.ini` (or
+`$XDG_DATA_HOME/dethrace/mod/settings.ini`). Set them once:
+
+```bash
+uv run drmod settings set game /path/to/CARMA
+uv run drmod settings set work /path/to/dethrace-mod
+uv run drmod settings show
+uv run drmod settings get game    # prints path only, exit 0
+uv run drmod settings get anim    # <game>/ANIM
+uv run drmod settings get fli_work
+```
+
+Override for one session with environment variables: `DRMOD_GAME_DIR`,
+`DRMOD_WORK_DIR`.
+
+With settings configured, commands accept short paths:
+
+```bash
+uv run drmod extract                              # <game>/ANIM -> <work>/fli_work
+uv run drmod repack                               # <work>/fli_work -> <game>/ANIM
+uv run drmod decode PARTSHOP.TXT                  # -> <work>/PARTSHOP.plain.txt
+uv run drmod encode PARTSHOP.plain.txt            # -> <game>/PARTSHOP.TXT
+uv run drmod pack fli_work/STRTSTIL ANIM/STRTSTIL.FLI
+```
+
+Explicit paths still work and override defaults.
+
+### Game data values (`config`)
+
+Read or write single values from encrypted `.TXT` files without manual decode/edit/encode:
+
+```bash
+uv run drmod config get PARTSHOP.TXT partshop.brakes.0.part_name
+uv run drmod config get PARTSHOP.TXT line 42
+uv run drmod config get PARTSHOP.TXT line 42 field 1
+uv run drmod config set PARTSHOP.TXT partshop.brakes.0.part_name BRA1.FLI
+uv run drmod config keys PARTSHOP.TXT
+```
+
+Categories for PARTSHOP: `armour`, `power`, `offensive`, `brakes` (part index 0-based).
+Files are searched under the configured `game` path (install root, `DATA/`, and `DATA/*/`).
+
 ## Usage
 
 Run via uv (recommended):
