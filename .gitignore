@@ -1,28 +1,17 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-.eggs/
-*.so
-
-# Virtual environments
-.venv/
-
-# Build artifacts
+# Build output
 dist/
-build/
-*.build/
-*.dist/
-*.onefile-build/
-drmod.build/
-drmod.dist/
-drmod.onefile-build/
+drmod
 
-# Test / coverage
-.pytest_cache/
-.coverage
-htmlcov/
+# Odin
+*.o
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# Local work dirs (extracted FLI frames)
+fli_work/
 
 # IDE
 .vscode/
@@ -33,6 +22,3 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
-
-# Local work dirs (extracted FLI frames)
-fli_work/

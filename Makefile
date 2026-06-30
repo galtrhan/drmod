@@ -1,49 +1,24 @@
-UV ?= uv
-UPX ?= upx
+ODIN ?= odin
 
 APP := drmod
 DIST_DIR := dist
 BINARY := $(DIST_DIR)/$(APP)
+ODIN_SOURCES := $(wildcard *.odin)
 
-.PHONY: all install sync build clean help
+.PHONY: all build clean help
 
 all: build
 
 help:
 	@echo "Targets:"
-	@echo "  install  Sync runtime dependencies (uv sync)"
-	@echo "  sync     Sync runtime + dev dependencies (uv sync --all-groups)"
-	@echo "  build    Compile standalone binary with Nuitka + UPX -> $(BINARY)"
+	@echo "  build    Compile Odin binary -> $(BINARY)"
 	@echo "  clean    Remove build artifacts"
 
-install:
-	$(UV) sync
+build: $(BINARY)
 
-sync:
-	$(UV) sync --all-groups
-
-build: sync $(BINARY)
-
-$(BINARY): pyproject.toml src/drmod/cli.py src/drmod/settings.py src/drmod/game_config.py src/drmod/text_codec.py src/drmod/__main__.py
+$(BINARY): $(ODIN_SOURCES)
 	mkdir -p $(DIST_DIR)
-	$(UV) run --group dev nuitka \
-		--mode=onefile \
-		--python-flag=-m \
-		--include-module=PIL \
-		--include-module=PIL.Image \
-		--include-package=drmod \
-		--output-filename=$(APP) \
-		--output-dir=$(DIST_DIR) \
-		--assume-yes-for-downloads \
-		src/drmod
-	@if command -v $(UPX) >/dev/null 2>&1; then \
-		$(UPX) --best --lzma $(BINARY); \
-		echo "UPX compressed $(BINARY)"; \
-	else \
-		echo "warning: $(UPX) not found on PATH, skipping compression"; \
-	fi
+	$(ODIN) build . -out:$@
 
 clean:
-	rm -rf $(DIST_DIR) build \
-		*.build *.dist *.onefile-build \
-		$(APP).build $(APP).dist $(APP).onefile-build
+	rm -rf $(DIST_DIR) $(APP)

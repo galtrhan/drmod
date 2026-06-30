@@ -1,36 +1,30 @@
 # drmod
 
-Extract and repack Carmageddon / Dethrace 8-bit FLI/FLC animations for modding.
+Carmageddon / Dethrace modding tools: extract and repack 8-bit FLI/FLC animations, and decode/encode encrypted game `.TXT` files.
 
 ## Requirements
 
-- **[uv](https://docs.astral.sh/uv/)** — Python package and project manager
-- **Python 3.11+** — managed by uv
+- **[Odin](https://odin-lang.org/)** — compiler (`odin` on `PATH`)
+- **ffmpeg** — FLI/FLC extraction (`ffmpeg` on `PATH`)
 - **[Aseprite](https://www.aseprite.org/)** CLI (`aseprite` on `PATH`) — only needed for `pack` / `repack`
 
-Optional (for building a standalone binary):
-
-- **Nuitka** — installed via uv dev dependencies (`make sync`)
-- **patchelf** — required by Nuitka on Linux (`pacman -S patchelf` on Arch)
-- **[UPX](https://upx.github.io/)** — compresses the compiled binary
-
-## Setup
-
-Install uv if you do not have it yet:
+## Build
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+make build
 ```
 
-Clone this repo, then sync dependencies:
+Output: `dist/drmod`
 
 ```bash
-git clone <repo-url> dethrace_tools
-cd dethrace_tools
-uv sync
+make clean   # remove dist/ and stray binary
 ```
 
-This creates a `.venv` and installs `drmod` with Pillow.
+Run without installing:
+
+```bash
+./dist/drmod --help
+```
 
 ## Settings
 
@@ -38,12 +32,12 @@ Paths are stored in `~/.local/share/dethrace/mod/settings.ini` (or
 `$XDG_DATA_HOME/dethrace/mod/settings.ini`). Set them once:
 
 ```bash
-uv run drmod settings set game /path/to/CARMA
-uv run drmod settings set work /path/to/dethrace-mod
-uv run drmod settings show
-uv run drmod settings get game    # prints path only, exit 0
-uv run drmod settings get anim    # <game>/ANIM
-uv run drmod settings get fli_work
+drmod settings set game /path/to/CARMA
+drmod settings set work /path/to/dethrace-mod
+drmod settings show
+drmod settings get game     # prints path only, exit 0
+drmod settings get anim     # <game>/ANIM
+drmod settings get fli_work
 ```
 
 Override for one session with environment variables: `DRMOD_GAME_DIR`,
@@ -52,11 +46,11 @@ Override for one session with environment variables: `DRMOD_GAME_DIR`,
 With settings configured, commands accept short paths:
 
 ```bash
-uv run drmod extract                              # <game>/ANIM -> <work>/fli_work
-uv run drmod repack                               # <work>/fli_work -> <game>/ANIM
-uv run drmod decode PARTSHOP.TXT                  # -> <work>/PARTSHOP.plain.txt
-uv run drmod encode PARTSHOP.plain.txt            # -> <game>/PARTSHOP.TXT
-uv run drmod pack fli_work/STRTSTIL ANIM/STRTSTIL.FLI
+drmod extract                              # <game>/ANIM -> <work>/fli_work
+drmod repack                               # <work>/fli_work -> <game>/ANIM
+drmod decode GENERAL.TXT                   # -> <work>/GENERAL.plain.txt
+drmod encode GENERAL.plain.txt             # -> <game>/GENERAL.TXT
+drmod pack fli_work/STRTSTIL ANIM/STRTSTIL.FLI
 ```
 
 Explicit paths still work and override defaults.
@@ -66,28 +60,18 @@ Explicit paths still work and override defaults.
 Read or write single values from encrypted `.TXT` files without manual decode/edit/encode:
 
 ```bash
-uv run drmod config get PARTSHOP.TXT partshop.brakes.0.part_name
-uv run drmod config get PARTSHOP.TXT line 42
-uv run drmod config get PARTSHOP.TXT line 42 field 1
-uv run drmod config set PARTSHOP.TXT partshop.brakes.0.part_name BRA1.FLI
-uv run drmod config keys PARTSHOP.TXT
+drmod config get GENERAL.TXT line.1
+drmod config get PARTSHOP.TXT line.42
+drmod config get PARTSHOP.TXT line.42.field.1
+drmod config set RACES.TXT line.5.field.0 newvalue
+drmod config keys DATA/GENERAL.TXT
 ```
 
-Categories for PARTSHOP: `armour`, `power`, `offensive`, `brakes` (part index 0-based).
 Files are searched under the configured `game` path (install root, `DATA/`, and `DATA/*/`).
 
 ## Usage
 
-Run via uv (recommended):
-
 ```bash
-uv run drmod --help
-```
-
-Or activate the venv and call `drmod` directly:
-
-```bash
-source .venv/bin/activate
 drmod --help
 ```
 
@@ -96,13 +80,13 @@ drmod --help
 Unpack every animation in the game `ANIM` folder:
 
 ```bash
-uv run drmod extract /path/to/game/ANIM ./fli_work
+drmod extract /path/to/game/ANIM ./fli_work
 ```
 
 Extract a single file:
 
 ```bash
-uv run drmod extract /path/to/game/ANIM ./fli_work --file STRTSTIL.FLI
+drmod extract /path/to/game/ANIM ./fli_work --file STRTSTIL.FLI
 ```
 
 Each animation becomes a subfolder with `frame_0000.png`, `frame_0001.png`, … and a `manifest.json`.
@@ -110,36 +94,26 @@ Each animation becomes a subfolder with `frame_0000.png`, `frame_0001.png`, … 
 ### Pack frames back to FLI
 
 ```bash
-uv run drmod pack ./fli_work/STRTSTIL /path/to/game/ANIM/STRTSTIL.FLI
+drmod pack ./fli_work/STRTSTIL /path/to/game/ANIM/STRTSTIL.FLI
 ```
 
 ### Repack entire workspace
 
 ```bash
-uv run drmod repack ./fli_work /path/to/game/ANIM
+drmod repack ./fli_work /path/to/game/ANIM
 ```
 
-## Building a standalone binary
-
-Install dev dependencies and compile with Nuitka, then compress with UPX:
+### Decode / encode encrypted `.TXT` files
 
 ```bash
-# system packages (Arch example)
-sudo pacman -S patchelf upx
-
-make build
+drmod decode PARTSHOP.TXT
+drmod encode PARTSHOP.plain.txt PARTSHOP.TXT
 ```
 
-Output: `dist/drmod` — a single executable with no Python runtime required.
-
-Clean build artifacts:
-
-```bash
-make clean
-```
+Use `--method auto|1|2` to force Carmageddon 1 vs C2/Splat encryption. Use `--wrap` on encode for files that wrap ciphertext at 24 columns.
 
 ## Workflow tips
 
 - Keep frames indexed (palette mode) when editing to preserve FLI color limits.
 - Frame files must be named `frame_XXXX.png` (zero-padded, 4 digits).
-- Repacking requires Aseprite batch mode; extraction only needs Pillow.
+- Repacking requires Aseprite batch mode; extraction uses ffmpeg.
