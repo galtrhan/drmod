@@ -117,3 +117,7 @@ Use `--method auto|1|2` to force Carmageddon 1 vs C2/Splat encryption. Use `--wr
 - Keep frames indexed (palette mode) when editing to preserve FLI color limits.
 - Frame files must be named `frame_XXXX.png` (zero-padded, 4 digits).
 - Repacking requires Aseprite batch mode; extraction uses ffmpeg.
+
+## Acknowledgements
+
+Thanks to [dethrace-labs/dethrace](https://github.com/dethrace-labs/dethrace) for the inspiration and reference point that made this project possible.
