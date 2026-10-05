@@ -10,13 +10,6 @@ Config_Error :: struct {
 	msg: string,
 }
 
-delete_lines :: proc(lines: ^[dynamic]string) {
-	for line in lines^ {
-		delete(line)
-	}
-	delete(lines^)
-}
-
 config_error :: proc(msg: string, allocator := context.allocator) -> Config_Error {
 	return {strings.clone(msg, allocator)}
 }
@@ -57,7 +50,7 @@ resolve_game_txt :: proc(path: string, allocator := context.allocator) -> (resol
 	relative, _ := strings.replace_all(candidate, "\\", "/", context.temp_allocator)
 
 	search_roots := make([dynamic]string, allocator)
-	defer delete(search_roots)
+	defer delete_string_list(&search_roots)
 	append(&search_roots, root)
 	append(&search_roots, join_path({root, "DATA"}, allocator))
 	data_dir := join_path({root, "DATA"}, context.temp_allocator)
@@ -78,9 +71,15 @@ resolve_game_txt :: proc(path: string, allocator := context.allocator) -> (resol
 		option_b := join_path({base, name}, context.temp_allocator)
 		options := [2]string{option_a, option_b}
 		for option in options {
-			if os.is_file(option) {
-				return clean_path(option, allocator), Config_Error{}
+			if !os.is_file(option) {
+				continue
 			}
+			cleaned := clean_path(option, allocator)
+			if !path_under_root(root, cleaned) {
+				delete(cleaned)
+				continue
+			}
+			return cleaned, Config_Error{}
 		}
 	}
 	return "", config_error(fmt.tprintf("game data file not found: %s (searched under %s)", path, root))
@@ -136,7 +135,7 @@ line_get :: proc(lines: []string, key_parts: []string, allocator := context.allo
 		if tok_err != nil {
 			return "", config_error(fmt.tprintf("%v", tok_err))
 		}
-		defer delete(tokens)
+		defer delete_string_list(&tokens)
 		field_index, fe := strconv.parse_int(key_parts[3])
 		if !fe || field_index < 0 || field_index >= len(tokens) {
 			return "", config_error(fmt.tprintf(
@@ -151,7 +150,12 @@ line_get :: proc(lines: []string, key_parts: []string, allocator := context.allo
 	return "", config_error(fmt.tprintf("unknown key: line.%s", strings.join(key_parts[1:], ".", context.temp_allocator)))
 }
 
-line_set :: proc(lines: ^[dynamic]string, key_parts: []string, value: string) -> Config_Error {
+line_set :: proc(
+	lines: ^[dynamic]string,
+	key_parts: []string,
+	value: string,
+	allocator := context.allocator,
+) -> Config_Error {
 	if len(key_parts) < 2 || key_parts[0] != "line" {
 		return config_error("key must start with line.<number>")
 	}
@@ -163,15 +167,16 @@ line_set :: proc(lines: ^[dynamic]string, key_parts: []string, value: string) ->
 		return config_error(fmt.tprintf("line %d out of range (1..%d)", line_number, len(lines)))
 	}
 	if len(key_parts) == 2 {
-		lines[line_number - 1] = strings.clone(value)
+		delete(lines[line_number - 1])
+		lines[line_number - 1] = strings.clone(value, allocator)
 		return Config_Error{}
 	}
 	if len(key_parts) >= 4 && key_parts[2] == "field" {
-		tokens, tok_err := tokenize_line(lines[line_number - 1])
+		tokens, tok_err := tokenize_line(lines[line_number - 1], allocator)
 		if tok_err != nil {
 			return config_error(fmt.tprintf("%v", tok_err))
 		}
-		defer delete(tokens)
+		defer delete_string_list(&tokens)
 		field_index, fe := strconv.parse_int(key_parts[3])
 		if !fe || field_index < 0 || field_index >= len(tokens) {
 			return config_error(fmt.tprintf(
@@ -181,8 +186,14 @@ line_set :: proc(lines: ^[dynamic]string, key_parts: []string, value: string) ->
 				max(len(tokens) - 1, 0),
 			))
 		}
-		tokens[field_index] = strings.clone(value)
-		lines[line_number - 1] = strings.join(tokens[:], "\t", context.temp_allocator)
+		delete(tokens[field_index])
+		tokens[field_index] = strings.clone(value, allocator)
+		joined, join_err := strings.join(tokens[:], "\t", allocator)
+		if join_err != nil {
+			return config_error("failed to join updated line fields")
+		}
+		delete(lines[line_number - 1])
+		lines[line_number - 1] = joined
 		return Config_Error{}
 	}
 	return config_error(fmt.tprintf("unknown key: line.%s", strings.join(key_parts[1:], ".", context.temp_allocator)))
@@ -193,7 +204,7 @@ config_get :: proc(file_path, key: string, method: Maybe(int), allocator := cont
 	if re.msg != "" {
 		return "", re
 	}
-	defer delete_lines(&lines)
+	defer delete_string_list(&lines)
 	key_parts := strings.split(key, ".", allocator)
 	defer delete(key_parts)
 	if len(key_parts) > 0 && key_parts[0] == "line" {
@@ -216,11 +227,11 @@ config_set :: proc(
 	if re.msg != "" {
 		return "", re
 	}
-	defer delete_lines(&lines)
+	defer delete_string_list(&lines)
 	key_parts := strings.split(key, ".", allocator)
 	defer delete(key_parts)
 	if len(key_parts) > 0 && key_parts[0] == "line" {
-		err = line_set(&lines, key_parts, value)
+		err = line_set(&lines, key_parts, value, allocator)
 		if err.msg != "" {
 			return "", err
 		}
@@ -243,7 +254,7 @@ config_keys :: proc(file_path: string, method: Maybe(int), allocator := context.
 	if re.msg != "" {
 		return keys, re
 	}
-	defer delete_lines(&lines)
+	defer delete_string_list(&lines)
 	keys = make([dynamic]string, allocator)
 	for line_number in 1 ..= len(lines) {
 		append(&keys, persist_printf("line.%d", line_number, allocator = allocator))
@@ -254,10 +265,7 @@ config_keys :: proc(file_path: string, method: Maybe(int), allocator := context.
 		for field_index in 0 ..< len(tokens) {
 			append(&keys, persist_printf("line.%d.field.%d", line_number, field_index, allocator = allocator))
 		}
-		for token in tokens {
-			delete(token)
-		}
-		delete(tokens)
+		delete_string_list(&tokens)
 	}
 	return
 }

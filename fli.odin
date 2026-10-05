@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:path/filepath"
 import "core:strconv"
@@ -62,6 +63,24 @@ is_fli_file :: proc(name: string) -> bool {
 	return false
 }
 
+when ODIN_OS == .Windows {
+	PATH_LIST_SEP :: ";"
+} else {
+	PATH_LIST_SEP :: ":"
+}
+
+is_executable_file :: proc(path: string) -> bool {
+	info, err := os.stat(path, context.temp_allocator)
+	if err != nil {
+		return false
+	}
+	defer os.file_info_delete(info, context.temp_allocator)
+	if info.type == .Directory {
+		return false
+	}
+	return .Execute_User in info.mode || .Execute_Group in info.mode || .Execute_Other in info.mode
+}
+
 find_fli_files :: proc(anim_dir: string, allocator := context.allocator) -> (files: [dynamic]string, err: os.Error) {
 	files = make([dynamic]string, allocator)
 	entries, read_err := os.read_all_directory_by_path(anim_dir, allocator)
@@ -74,16 +93,11 @@ find_fli_files :: proc(anim_dir: string, allocator := context.allocator) -> (fil
 			append(&files, join_path({anim_dir, entry.name}, allocator))
 		}
 	}
-	// Sort by name (case-insensitive natural order)
-	for i in 0 ..< len(files) {
-		for j in i + 1 ..< len(files) {
-			base_i := strings.to_lower(filepath.base(files[i]), context.temp_allocator)
-			base_j := strings.to_lower(filepath.base(files[j]), context.temp_allocator)
-			if natural_key_less(base_j, base_i) {
-				files[i], files[j] = files[j], files[i]
-			}
-		}
-	}
+	slice.sort_by(files[:], proc(a, b: string) -> bool {
+		base_a := strings.to_lower(filepath.base(a), context.temp_allocator)
+		base_b := strings.to_lower(filepath.base(b), context.temp_allocator)
+		return natural_key_less(base_a, base_b)
+	})
 	return
 }
 
@@ -102,9 +116,58 @@ write_manifest :: proc(out_dir, fli_path: string, frame_count: int) -> os.Error 
 	return os.write_entire_file(manifest_path, transmute([]u8)content)
 }
 
+parse_manifest_source :: proc(frames_dir: string, allocator := context.allocator) -> (source: string, ok: bool) {
+	manifest_path := join_path({frames_dir, "manifest.json"}, context.temp_allocator)
+	data, err := os.read_entire_file(manifest_path, context.temp_allocator)
+	if err != nil {
+		return "", false
+	}
+	text := string(data)
+	marker := `"source"`
+	start := strings.index(text, marker)
+	if start < 0 {
+		return "", false
+	}
+	rest := text[start + len(marker):]
+	i := 0
+	for i < len(rest) {
+		c := rest[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ':' {
+			i += 1
+			continue
+		}
+		break
+	}
+	if i >= len(rest) || rest[i] != '"' {
+		return "", false
+	}
+	i += 1
+	end := i
+	for end < len(rest) && rest[end] != '"' {
+		end += 1
+	}
+	if end >= len(rest) || end == i {
+		return "", false
+	}
+	return strings.clone(rest[i:end], allocator), true
+}
+
+repack_output_path :: proc(anim_dir, frames_dir, stem: string, allocator := context.allocator) -> string {
+	if source, ok := parse_manifest_source(frames_dir, context.temp_allocator); ok {
+		return join_path({anim_dir, filepath.base(source)}, allocator)
+	}
+	for ext in FLI_EXTENSIONS {
+		candidate := join_path({anim_dir, fmt.tprintf("%s%s", stem, ext)}, context.temp_allocator)
+		if os.is_file(candidate) {
+			return clean_path(candidate, allocator)
+		}
+	}
+	return join_path({anim_dir, fmt.tprintf("%s.FLI", stem)}, allocator)
+}
+
 find_executable :: proc(name: string, allocator := context.allocator) -> (path: string, ok: bool) {
 	path_env := os.get_env("PATH", context.temp_allocator)
-	for dir in strings.split(path_env, ":", context.temp_allocator) {
+	for dir in strings.split(path_env, PATH_LIST_SEP, context.temp_allocator) {
 		if dir == "" {
 			continue
 		}
@@ -112,11 +175,26 @@ find_executable :: proc(name: string, allocator := context.allocator) -> (path: 
 		if join_err != nil {
 			continue
 		}
-		if os.exists(candidate) {
+		if is_executable_file(candidate) {
 			return strings.clone(candidate, allocator), true
 		}
 	}
 	return "", false
+}
+
+run_process :: proc(desc: os.Process_Desc) -> os.Error {
+	child, start_err := os.process_start(desc)
+	if start_err != nil {
+		return start_err
+	}
+	state, wait_err := os.process_wait(child)
+	if wait_err != nil {
+		return wait_err
+	}
+	if !state.exited || state.exit_code != 0 {
+		return os.General_Error.Invalid_File
+	}
+	return nil
 }
 
 count_png_frames :: proc(out_dir: string) -> (count: int, err: os.Error) {
@@ -136,13 +214,9 @@ count_png_frames :: proc(out_dir: string) -> (count: int, err: os.Error) {
 	return
 }
 
-extract_fli :: proc(fli_path, out_dir: string) -> (frame_count: int, err: os.Error) {
+extract_fli :: proc(fli_path, out_dir, ffmpeg: string) -> (frame_count: int, err: os.Error) {
 	if err = os.make_directory_all(out_dir); err != nil && err != os.General_Error.Exist {
 		return
-	}
-	ffmpeg, ok := find_executable("ffmpeg")
-	if !ok {
-		return 0, os.General_Error.Invalid_File
 	}
 	pattern := join_path({out_dir, "frame_%04d.png"}, context.temp_allocator)
 	cmd := []string{
@@ -156,13 +230,8 @@ extract_fli :: proc(fli_path, out_dir: string) -> (frame_count: int, err: os.Err
 		"0",
 		pattern,
 	}
-	child, start_err := os.process_start({command = cmd})
-	if start_err != nil {
-		return 0, start_err
-	}
-	_, wait_err := os.process_wait(child)
-	if wait_err != nil {
-		return 0, wait_err
+	if err = run_process({command = cmd}); err != nil {
+		return 0, err
 	}
 	frame_count, err = count_png_frames(out_dir)
 	if err != nil {
@@ -209,41 +278,35 @@ list_frame_files :: proc(frames_dir: string, allocator := context.allocator) -> 
 	if len(frames) == 0 {
 		return frames, os.General_Error.Invalid_File
 	}
-	for i in 0 ..< len(frames) {
-		for j in i + 1 ..< len(frames) {
-			if natural_key_less(filepath.base(frames[j]), filepath.base(frames[i])) {
-				frames[i], frames[j] = frames[j], frames[i]
-			}
-		}
-	}
+	slice.sort_by(frames[:], proc(a, b: string) -> bool {
+		return natural_key_less(filepath.base(a), filepath.base(b))
+	})
 	return
 }
 
-pack_frames :: proc(frames_dir, out_fli: string) -> os.Error {
-	aseprite, ok := find_executable("aseprite")
-	if !ok {
-		return os.General_Error.Invalid_File
-	}
+pack_frames :: proc(frames_dir, out_fli, aseprite: string) -> os.Error {
 	frames, list_err := list_frame_files(frames_dir)
 	if list_err != nil {
 		return list_err
 	}
-	defer delete(frames)
+	defer delete_string_list(&frames)
 	if err := os.make_directory_all(filepath.dir(out_fli)); err != nil && err != os.General_Error.Exist {
 		return err
+	}
+	out_abs, abs_err := filepath.abs(out_fli, context.temp_allocator)
+	if abs_err != nil {
+		return abs_err
 	}
 	cmd := make([dynamic]string, context.temp_allocator)
 	append(&cmd, aseprite, "-b")
 	for frame in frames {
-		append(&cmd, frame)
+		append(&cmd, filepath.base(frame))
 	}
-	append(&cmd, "--save-as", out_fli)
-	child, start_err := os.process_start({command = cmd[:]})
-	if start_err != nil {
-		return start_err
-	}
-	_, wait_err := os.process_wait(child)
-	return wait_err
+	append(&cmd, "--save-as", out_abs)
+	return run_process({
+		command = cmd[:],
+		working_dir = frames_dir,
+	})
 }
 
 parse_frame_index :: proc(name: string) -> (index: int, ok: bool) {

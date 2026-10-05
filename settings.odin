@@ -43,17 +43,24 @@ normalize_setting_key :: proc(name: string) -> (key: string, ok: bool) {
 	return "", false
 }
 
-settings_dir :: proc(allocator := context.allocator) -> string {
+settings_dir :: proc(allocator := context.allocator) -> (dir: string, err: Settings_Error) {
 	xdg_data := os.get_env("XDG_DATA_HOME", context.temp_allocator)
 	if xdg_data != "" {
-		return join_path({xdg_data, SETTINGS_DIR_NAME}, allocator)
+		return join_path({xdg_data, SETTINGS_DIR_NAME}, allocator), Settings_Error{}
 	}
 	home := os.get_env("HOME", context.temp_allocator)
-	return join_path({home, ".local", "share", SETTINGS_DIR_NAME}, allocator)
+	if home == "" {
+		return "", settings_error("HOME and XDG_DATA_HOME are unset; cannot locate settings")
+	}
+	return join_path({home, ".local", "share", SETTINGS_DIR_NAME}, allocator), Settings_Error{}
 }
 
-settings_path :: proc(allocator := context.allocator) -> string {
-	return join_path({settings_dir(allocator), SETTINGS_FILE_NAME}, allocator)
+settings_path :: proc(allocator := context.allocator) -> (path: string, err: Settings_Error) {
+	dir, e := settings_dir(allocator)
+	if e.msg != "" {
+		return "", e
+	}
+	return join_path({dir, SETTINGS_FILE_NAME}, allocator), Settings_Error{}
 }
 
 Ini_Data :: struct {
@@ -106,7 +113,7 @@ save_ini :: proc(path: string, data: Ini_Data) -> os.Error {
 	}
 	b := strings.builder_make()
 	defer strings.builder_destroy(&b)
-	strings.write_string(&b, "; drmod settings — Carmageddon install (game) and mod workspace (work).\n")
+	strings.write_string(&b, "; drmod settings - Carmageddon install (game) and mod workspace (work).\n")
 	strings.write_string(&b, "; Commands: drmod settings set game /path/to/CARMA\n")
 	strings.write_string(&b, ";           drmod settings set work /path/to/workspace\n\n")
 	strings.write_string(&b, "[paths]\n")
@@ -115,12 +122,19 @@ save_ini :: proc(path: string, data: Ini_Data) -> os.Error {
 	return os.write_entire_file(path, strings.to_string(b))
 }
 
-init_settings :: proc(force: bool, allocator := context.allocator) -> (path: string, err: os.Error) {
-	path = settings_path(allocator)
-	if os.exists(path) && !force {
-		return
+init_settings :: proc(force: bool, allocator := context.allocator) -> (path: string, err: Settings_Error) {
+	resolved, pe := settings_path(allocator)
+	if pe.msg != "" {
+		return "", pe
 	}
-	return path, save_ini(path, {})
+	path = resolved
+	if os.exists(path) && !force {
+		return path, Settings_Error{}
+	}
+	if save_err := save_ini(path, {}); save_err != nil {
+		return "", settings_error(fmt.tprintf("%v", save_err))
+	}
+	return path, Settings_Error{}
 }
 
 get_path_setting :: proc(key: string, allocator := context.allocator) -> (result: string, ok: bool) {
@@ -128,7 +142,11 @@ get_path_setting :: proc(key: string, allocator := context.allocator) -> (result
 	if env := os.get_env(env_name, context.temp_allocator); env != "" {
 		return strings.clone(strings.trim_space(env), allocator), true
 	}
-	ini, err := load_ini(settings_path(allocator), allocator)
+	path, pe := settings_path(allocator)
+	if pe.msg != "" {
+		return "", false
+	}
+	ini, err := load_ini(path, allocator)
 	if err != nil {
 		return "", false
 	}
@@ -148,7 +166,10 @@ set_path_setting :: proc(key, value: string, allocator := context.allocator) -> 
 	if key != GAME_KEY && key != WORK_KEY {
 		return "", settings_error("unknown setting key")
 	}
-	path := settings_path(allocator)
+	path, pe := settings_path(allocator)
+	if pe.msg != "" {
+		return "", pe
+	}
 	ini, load_err := load_ini(path, allocator)
 	if load_err != nil {
 		return "", settings_error(fmt.tprintf("%v", load_err))
@@ -274,13 +295,14 @@ get_setting_value :: proc(name: string, allocator := context.allocator) -> (valu
 			return join_path({p, "fli_work"}, allocator), Settings_Error{}
 		}
 	case DERIVED_SETTINGS:
-		return settings_path(allocator), Settings_Error{}
+		return settings_path(allocator)
 	}
 	return "", Settings_Error{}
 }
 
 print_settings_error :: proc(err: Settings_Error) {
-	path := settings_path(context.temp_allocator)
 	fmt.fprintf(os.stderr, "error: %s\n", err.msg)
-	fmt.fprintf(os.stderr, "settings file: %s\n", path)
+	if path, pe := settings_path(context.temp_allocator); pe.msg == "" {
+		fmt.fprintf(os.stderr, "settings file: %s\n", path)
+	}
 }

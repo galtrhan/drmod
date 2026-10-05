@@ -329,7 +329,7 @@ decode_file_lines :: proc(path: string, method: Maybe(int), allocator := context
 	if read_err != nil {
 		return lines, read_err
 	}
-	defer delete_lines(&physical)
+	defer delete_string_list(&physical)
 	if len(physical) == 0 {
 		return
 	}
@@ -372,7 +372,7 @@ write_encoded_file :: proc(
 ) -> os.Error {
 	enc_method := resolve_method(path, path, method, allocator)
 	out_lines := make([dynamic]string, allocator)
-	defer delete_lines(&out_lines)
+	defer delete_string_list(&out_lines)
 	for line in logical_lines {
 		encoded_body: string
 		err: os.Error
@@ -411,14 +411,14 @@ decode_file :: proc(
 	if read_err != nil {
 		return 0, read_err
 	}
-	defer delete_lines(&physical)
+	defer delete_string_list(&physical)
 	if len(physical) == 0 {
 		write_err := os.write_entire_file(dst, nil)
 		return 0, write_err
 	}
 	enc_method := resolve_method(src, dst, method, allocator)
 	out_lines := make([dynamic]string, allocator)
-	defer delete_lines(&out_lines)
+	defer delete_string_list(&out_lines)
 	if len(physical) > 0 && len(physical[0]) > 0 && physical[0][0] == ENCODED_LINE_PREFIX {
 		chunks, group_err := group_physical_lines(physical[:], allocator)
 		if group_err != nil {
@@ -458,14 +458,14 @@ encode_file :: proc(
 	if read_err != nil {
 		return 0, read_err
 	}
-	defer delete_lines(&physical)
+	defer delete_string_list(&physical)
 	if len(physical) == 0 {
 		write_err := os.write_entire_file(dst, nil)
 		return 0, write_err
 	}
 	enc_method := resolve_method(src, dst, method, allocator)
 	out_lines := make([dynamic]string, allocator)
-	defer delete_lines(&out_lines)
+	defer delete_string_list(&out_lines)
 	for line in physical {
 		if len(line) > 0 && line[0] == RAW_LINE_PREFIX {
 			append(&out_lines, line[1:])

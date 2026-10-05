@@ -69,19 +69,24 @@ Arg_Flags :: struct {
 	force:        bool,
 }
 
-parse_flags :: proc(args: ^[dynamic]string) -> Arg_Flags {
-	flags: Arg_Flags
+parse_flags :: proc(args: ^[dynamic]string) -> (flags: Arg_Flags, err_msg: string) {
 	flags.method = nil
 	flags.line_ending = ""
 	i := 0
 	for i < len(args) {
 		a := args[i]
-		if a == "--file" && i + 1 < len(args) {
+		if a == "--file" {
+			if i + 1 >= len(args) {
+				return {}, "--file requires a value"
+			}
 			flags.file = args[i + 1]
 			remove_args(args, i, 2)
 			continue
 		}
-		if a == "--method" && i + 1 < len(args) {
+		if a == "--method" {
+			if i + 1 >= len(args) {
+				return {}, "--method requires a value (auto|1|2)"
+			}
 			switch args[i + 1] {
 			case "auto":
 				flags.method = nil
@@ -89,12 +94,22 @@ parse_flags :: proc(args: ^[dynamic]string) -> Arg_Flags {
 				flags.method = 1
 			case "2":
 				flags.method = 2
+			case:
+				return {}, fmt.tprintf("invalid --method value: %s (use auto|1|2)", args[i + 1])
 			}
 			remove_args(args, i, 2)
 			continue
 		}
-		if a == "--line-ending" && i + 1 < len(args) {
-			flags.line_ending = args[i + 1]
+		if a == "--line-ending" {
+			if i + 1 >= len(args) {
+				return {}, "--line-ending requires a value (lf|crlf)"
+			}
+			switch args[i + 1] {
+			case "lf", "crlf":
+				flags.line_ending = args[i + 1]
+			case:
+				return {}, fmt.tprintf("invalid --line-ending value: %s (use lf|crlf)", args[i + 1])
+			}
 			remove_args(args, i, 2)
 			continue
 		}
@@ -110,7 +125,7 @@ parse_flags :: proc(args: ^[dynamic]string) -> Arg_Flags {
 		}
 		i += 1
 	}
-	return flags
+	return flags, ""
 }
 
 line_ending_bytes :: proc(value: string, default: string) -> string {
@@ -126,12 +141,25 @@ line_ending_bytes :: proc(value: string, default: string) -> string {
 	}
 }
 
-cmd_extract :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
+print_flag_error :: proc(err_msg: string) -> int {
+	fmt.fprintf(os.stderr, "error: %s\n", err_msg)
+	return 1
+}
+
+parse_cli_args :: proc(args: []string) -> (flags: Arg_Flags, positional: [dynamic]string, err_msg: string) {
+	positional = make([dynamic]string, context.temp_allocator)
 	for a in args {
 		append(&positional, a)
 	}
-	flags := parse_flags(&positional)
+	flags, err_msg = parse_flags(&positional)
+	return
+}
+
+cmd_extract :: proc(args: []string) -> int {
+	flags, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
+	}
 
 	anim_dir: string
 	out_root: string
@@ -161,7 +189,7 @@ cmd_extract :: proc(args: []string) -> int {
 	}
 
 	fli_files: [dynamic]string
-	defer delete(fli_files)
+	defer delete_string_list(&fli_files)
 	if flags.file != "" {
 		single := join_path({anim_dir, flags.file}, context.temp_allocator)
 		if !os.is_file(single) {
@@ -175,26 +203,27 @@ cmd_extract :: proc(args: []string) -> int {
 			fmt.fprintf(os.stderr, "error: %v\n", err)
 			return 1
 		}
-		defer delete(found)
-		if len(found) == 0 {
+		fli_files = found
+		if len(fli_files) == 0 {
 			fmt.fprintf(os.stderr, "error: no FLI/FLC files in %s\n", anim_dir)
 			return 1
 		}
-		fli_files = found
+	}
+
+	ffmpeg, has_ffmpeg := find_executable("ffmpeg")
+	if !has_ffmpeg {
+		fmt.fprintf(os.stderr, "error: ffmpeg not found on PATH; needed for FLI extraction\n")
+		return 1
 	}
 
 	failures := 0
 	for fli_path in fli_files {
 		stem := strings.trim_suffix(filepath.base(fli_path), filepath.ext(fli_path))
 		target := join_path({out_root, stem}, context.temp_allocator)
-		count, err := extract_fli(fli_path, target)
+		count, err := extract_fli(fli_path, target, ffmpeg)
 		if err != nil {
 			failures += 1
-			if _, ok := find_executable("ffmpeg"); !ok {
-				fmt.fprintf(os.stderr, "%s: FAILED (ffmpeg not found on PATH; needed for FLI extraction)\n", filepath.base(fli_path))
-			} else {
-				fmt.fprintf(os.stderr, "%s: FAILED (%v)\n", filepath.base(fli_path), err)
-			}
+			fmt.fprintf(os.stderr, "%s: FAILED (%v)\n", filepath.base(fli_path), err)
 			continue
 		}
 		fmt.printf("%s: %d frame(s) -> %s/\n", filepath.base(fli_path), count, target)
@@ -203,11 +232,10 @@ cmd_extract :: proc(args: []string) -> int {
 }
 
 cmd_pack :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	_, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	_ = parse_flags(&positional)
 	if len(positional) < 1 {
 		fmt.fprintf(os.stderr, "error: pack requires a frames_dir argument\n")
 		return 1
@@ -237,12 +265,13 @@ cmd_pack :: proc(args: []string) -> int {
 		fmt.fprintf(os.stderr, "error: not a directory: %s\n", frames_dir)
 		return 1
 	}
-	if err := pack_frames(frames_dir, out_fli); err != nil {
-		if _, ok := find_executable("aseprite"); !ok {
-			fmt.fprintf(os.stderr, "error: Aseprite CLI not found on PATH (needed to write FLI/FLC)\n")
-		} else {
-			fmt.fprintf(os.stderr, "error: %v\n", err)
-		}
+	aseprite, has_aseprite := find_executable("aseprite")
+	if !has_aseprite {
+		fmt.fprintf(os.stderr, "error: Aseprite CLI not found on PATH (needed to write FLI/FLC)\n")
+		return 1
+	}
+	if err := pack_frames(frames_dir, out_fli, aseprite); err != nil {
+		fmt.fprintf(os.stderr, "error: %v\n", err)
 		return 1
 	}
 	fmt.printf("packed -> %s\n", out_fli)
@@ -250,11 +279,10 @@ cmd_pack :: proc(args: []string) -> int {
 }
 
 cmd_repack :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	_, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	_ = parse_flags(&positional)
 
 	work_root: string
 	anim_dir: string
@@ -282,7 +310,16 @@ cmd_repack :: proc(args: []string) -> int {
 		fmt.fprintf(os.stderr, "error: not a directory: %s\n", work_root)
 		return 1
 	}
-	os.make_directory_all(anim_dir)
+	if mkdir_err := os.make_directory_all(anim_dir); mkdir_err != nil && mkdir_err != os.General_Error.Exist {
+		fmt.fprintf(os.stderr, "error: cannot create anim directory %s: %v\n", anim_dir, mkdir_err)
+		return 1
+	}
+
+	aseprite, has_aseprite := find_executable("aseprite")
+	if !has_aseprite {
+		fmt.fprintf(os.stderr, "error: Aseprite CLI not found on PATH (needed to write FLI/FLC)\n")
+		return 1
+	}
 
 	entries, err := os.read_all_directory_by_path(work_root, context.temp_allocator)
 	if err != nil {
@@ -305,8 +342,8 @@ cmd_repack :: proc(args: []string) -> int {
 	failures := 0
 	for name in subdirs {
 		subdir := join_path({work_root, name}, context.temp_allocator)
-		out_fli := join_path({anim_dir, fmt.tprintf("%s.FLI", name)}, context.temp_allocator)
-		if pack_err := pack_frames(subdir, out_fli); pack_err != nil {
+		out_fli := repack_output_path(anim_dir, subdir, name, context.temp_allocator)
+		if pack_err := pack_frames(subdir, out_fli, aseprite); pack_err != nil {
 			failures += 1
 			fmt.fprintf(os.stderr, "%s: skipped (%v)\n", name, pack_err)
 			continue
@@ -339,11 +376,10 @@ default_encoded_path :: proc(src: string, allocator := context.allocator) -> str
 }
 
 cmd_decode :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	flags, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	flags := parse_flags(&positional)
 	if len(positional) < 1 {
 		fmt.fprintf(os.stderr, "error: decode requires an input file\n")
 		return 1
@@ -388,11 +424,10 @@ cmd_decode :: proc(args: []string) -> int {
 }
 
 cmd_encode :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	flags, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	flags := parse_flags(&positional)
 	if len(positional) < 1 {
 		fmt.fprintf(os.stderr, "error: encode requires an input file\n")
 		return 1
@@ -469,7 +504,11 @@ cmd_settings :: proc(args: []string) -> int {
 
 cmd_settings_show :: proc(args: []string) -> int {
 	_ = args
-	path := settings_path(context.temp_allocator)
+	path, pe := settings_path(context.temp_allocator)
+	if pe.msg != "" {
+		print_settings_error(pe)
+		return 1
+	}
 	game, has_game := game_dir()
 	work, has_work := work_dir()
 	fmt.printf("settings: %s\n", path)
@@ -550,14 +589,13 @@ cmd_settings_get :: proc(args: []string) -> int {
 }
 
 cmd_settings_init :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	flags, _, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	flags := parse_flags(&positional)
 	path, err := init_settings(flags.force)
-	if err != nil {
-		fmt.fprintf(os.stderr, "error: %v\n", err)
+	if err.msg != "" {
+		print_settings_error(err)
 		return 1
 	}
 	fmt.printf("settings file: %s\n", path)
@@ -568,7 +606,12 @@ cmd_settings_init :: proc(args: []string) -> int {
 
 cmd_settings_path :: proc(args: []string) -> int {
 	_ = args
-	fmt.println(settings_path(context.temp_allocator))
+	path, pe := settings_path(context.temp_allocator)
+	if pe.msg != "" {
+		print_settings_error(pe)
+		return 1
+	}
+	fmt.println(path)
 	return 0
 }
 
@@ -593,11 +636,10 @@ cmd_config :: proc(args: []string) -> int {
 }
 
 cmd_config_get :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	flags, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	flags := parse_flags(&positional)
 	if len(positional) < 2 {
 		fmt.fprintf(os.stderr, "error: config get requires file and key\n")
 		return 1
@@ -613,11 +655,10 @@ cmd_config_get :: proc(args: []string) -> int {
 }
 
 cmd_config_set :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	flags, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	flags := parse_flags(&positional)
 	if len(positional) < 3 {
 		fmt.fprintf(os.stderr, "error: config set requires file, key, and value\n")
 		return 1
@@ -632,11 +673,10 @@ cmd_config_set :: proc(args: []string) -> int {
 }
 
 cmd_config_keys :: proc(args: []string) -> int {
-	positional := make([dynamic]string, context.temp_allocator)
-	for a in args {
-		append(&positional, a)
+	flags, positional, ferr := parse_cli_args(args)
+	if ferr != "" {
+		return print_flag_error(ferr)
 	}
-	flags := parse_flags(&positional)
 	if len(positional) < 1 {
 		fmt.fprintf(os.stderr, "error: config keys requires a file\n")
 		return 1
@@ -646,12 +686,7 @@ cmd_config_keys :: proc(args: []string) -> int {
 		print_config_error(err)
 		return 1
 	}
-	defer {
-		for k in keys {
-			delete(k)
-		}
-		delete(keys)
-	}
+	defer delete_string_list(&keys)
 	for key in keys {
 		fmt.println(key)
 	}
